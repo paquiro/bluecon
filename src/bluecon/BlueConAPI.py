@@ -143,6 +143,17 @@ class BlueConAPI:
                                         headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
                     return response.status == 200
 
+    def _getInstallationId(self) -> str:
+        """Build a Firebase-installation-ID-like identifier (22 url-safe base64 chars).
+
+        The official app sends its real Firebase Installation ID in the `id` field of the
+        v2 token registration. The push receiver library does not keep the one it generates,
+        so a stable look-alike is derived from the FCM token instead."""
+
+        raw = bytearray(hashlib.sha256((self.deviceId or "").encode('utf-8')).digest()[:17])
+        raw[0] = 0b01110000 + (raw[0] % 0b00010000)
+        return base64.urlsafe_b64encode(bytes(raw)).decode('utf-8')[:22]
+
     async def registerAppToken(self, active: bool) -> bool:
         """Register (or deactivate) this FCM token with Fermax.
 
@@ -161,6 +172,7 @@ class BlueConAPI:
                 "os": "ANDROID",
                 "osVersion": "14",
                 "phoneMobile": "Pixel 7",
+                "id": self._getInstallationId(),
                 "active": active,
                 "force": False
             }),
