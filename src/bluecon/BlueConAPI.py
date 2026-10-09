@@ -95,6 +95,7 @@ class BlueConAPI:
         self.__notificationInfoStorage = notificationInfoStorage
         self.receiver : PushReceiver = None
         self.deviceId : str = None
+        self._installationFid : str | None = None
         self.notificationCallback = notificationCallback
     
     def __getAuthHeader(self) -> str:
@@ -149,6 +150,9 @@ class BlueConAPI:
         The official app sends its real Firebase Installation ID in the `id` field of the
         v2 token registration. The push receiver library does not keep the one it generates,
         so a stable look-alike is derived from the FCM token instead."""
+
+        if self._installationFid:
+            return self._installationFid
 
         raw = bytearray(hashlib.sha256((self.deviceId or "").encode('utf-8')).digest()[:17])
         raw[0] = 0b01110000 + (raw[0] % 0b00010000)
@@ -260,11 +264,19 @@ class BlueConAPI:
 
             PACKAGE_CERT = buildPackageCert()
 
-            credentials = await blueConAPIClient.__notificationInfoStorage.retrieveCredentials()
-            if credentials is None:
-                _LOGGER.info("No cached FCM credentials found, registering with Google/Firebase")
+            def registerWithFid():
+                """Register with FCM keeping the Firebase Installation ID that the push
+                receiver library generates internally but does not return."""
+                captured = {}
+                originalGenerateFid = AndroidFCM.generate_firebase_fid
+
+                def capturingGenerateFid():
+                    captured['fid'] = originalGenerateFid()
+                    return captured['fid']
+
+                AndroidFCM.generate_firebase_fid = staticmethod(capturingGenerateFid)
                 try:
-                    credentials = AndroidFCM.register(
+                    registered = AndroidFCM.register(
                         api_key=blueConAPIClient.__apiKey,
                         project_id=blueConAPIClient.__projectId,
                         gcm_sender_id = blueConAPIClient.__senderId,
@@ -272,6 +284,19 @@ class BlueConAPI:
                         android_package_name=blueConAPIClient.__packageName,
                         android_package_cert=PACKAGE_CERT
                     )
+                finally:
+                    AndroidFCM.generate_firebase_fid = staticmethod(originalGenerateFid)
+                registered['fcm']['fid'] = captured.get('fid')
+                return registered
+
+            credentials = await blueConAPIClient.__notificationInfoStorage.retrieveCredentials()
+            if credentials is None or not credentials.get('fcm', {}).get('fid'):
+                if credentials is None:
+                    _LOGGER.info("No cached FCM credentials found, registering with Google/Firebase")
+                else:
+                    _LOGGER.info("Cached FCM credentials have no Firebase installation id, registering again")
+                try:
+                    credentials = await asyncio.get_running_loop().run_in_executor(None, registerWithFid)
                 except Exception:
                     _LOGGER.exception("FCM registration failed, notifications will not work")
                     return
@@ -280,6 +305,7 @@ class BlueConAPI:
                 _LOGGER.info("Using cached FCM credentials")
 
             blueConAPIClient.deviceId = credentials["fcm"]["token"]
+            blueConAPIClient._installationFid = credentials["fcm"].get("fid")
             registered = await blueConAPIClient.registerAppToken(True)
             if not registered:
                 _LOGGER.error("Failed to register this device's FCM token with Fermax, notifications will not arrive")
