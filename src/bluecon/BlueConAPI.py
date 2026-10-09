@@ -171,7 +171,7 @@ class BlueConAPI:
                 "locale": "es-ES",
                 "os": "ANDROID",
                 "osVersion": "14",
-                "phoneMobile": "Pixel 7",
+                "phoneMobile": "HomeAssistant",
                 "id": self._getInstallationId(),
                 "active": active,
                 "force": False
