@@ -195,7 +195,18 @@ class BlueConAPI:
             return asyncio.run_coroutine_threadsafe(coroutine, loop).result()
 
         def on_notification(blueConAPIClient: BlueConAPI, notification: dict, data_message):
-            _LOGGER.debug("Received FCM notification: %s", notification)
+            try:
+                _LOGGER.info(
+                    "Received FCM notification: type=%r keys=%s",
+                    notification.get('FermaxNotificationType'),
+                    sorted(notification.keys())
+                )
+                _LOGGER.debug(
+                    "FCM notification payload: %s",
+                    {k: ('<redacted>' if 'token' in k.lower() else v) for k, v in notification.items()}
+                )
+            except Exception:
+                _LOGGER.exception("Could not describe the received FCM notification")
             idstr = data_message.persistent_id
             received_persistent_ids = []
 
@@ -275,9 +286,12 @@ class BlueConAPI:
         await listener_thread(self)
     
     async def stopNotificationListener(self) -> bool:
-        self.__listenerThread.join(10.0)
-        await self.registerAppToken(False)
-        return self.__listenerThread.is_alive()
+        """Deactivate this device's token with Fermax.
+
+        The push receiver runs in an executor job owned by the caller, so there is no
+        thread to join here (the old self.__listenerThread no longer exists)."""
+
+        return not await self.registerAppToken(False)
     
     async def getLastPicture(self, deviceId: str) -> bytes | None:
         async with aiohttp.ClientSession() as session:
