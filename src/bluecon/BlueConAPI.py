@@ -157,10 +157,12 @@ class BlueConAPI:
                 "token": self.deviceId,
                 "appVersion": "4.3.4",
                 "appBuild": "749",
-                "locale": "en",
-                "os": "Android",
-                "osVersion": "Android 14",
-                "active": active
+                "locale": "es-ES",
+                "os": "ANDROID",
+                "osVersion": "14",
+                "phoneMobile": "Pixel 7",
+                "active": active,
+                "force": False
             }),
             ("v1", f'{FERMAX_BASE_URL}/notification/api/v1/apptoken', {
                 "token": self.deviceId,
