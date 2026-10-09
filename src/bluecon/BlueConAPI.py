@@ -333,16 +333,34 @@ class BlueConAPI:
 
         return not await self.registerAppToken(False)
     
+    async def _getCallRegistry(self, session: aiohttp.ClientSession, deviceId: str) -> List[CallLog]:
+        """Fetch the call registry of this app registration, restricted to the given device.
+
+        Fermax scopes the registry by `appToken`, which is the FCM token this app registered
+        (the same value the official app sends). The intercom's device id is only used as a
+        fallback when the push listener has not provided a token yet."""
+
+        appToken = self.deviceId or deviceId
+        async with session.get(f'{FERMAX_BASE_URL}/callManager/api/v1/callregistry/participant',
+                                params = {
+                                    "appToken": appToken,
+                                    "callRegistryType": "all"
+                                },
+                                headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
+            if response.status != 200:
+                _LOGGER.warning("Call registry request failed with HTTP %s: %s", response.status, (await response.text())[:200])
+                return []
+            responseJson = await response.json()
+
+        callLogs: List[CallLog] = [callLog for callLog in map(CallLog, responseJson) if callLog.deviceId == deviceId]
+        _LOGGER.debug("Call registry returned %s entries for device %s (%s with photo)", len(responseJson), deviceId, sum(1 for c in callLogs if c.photoId is not None))
+        return callLogs
+
     async def getLastPicture(self, deviceId: str) -> bytes | None:
         async with aiohttp.ClientSession() as session:
-            async with session.get(f'{FERMAX_BASE_URL}/callManager/api/v1/callregistry/participant',
-                                    params = {
-                                        "appToken": deviceId,
-                                        "callRegistryType": "all"
-                                    },
-                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
-                responseJson = await response.json()
-            callLogs: List[CallLog] = [callLog for callLog in map(CallLog, responseJson) if callLog.deviceId == deviceId and callLog.photoId is not None]
+            allCallLogs = await self._getCallRegistry(session, deviceId)
+            callLogs: List[CallLog] = [callLog for callLog in allCallLogs if callLog.photoId is not None]
+            _LOGGER.info("Call registry for device %s: %s entries, %s with photo", deviceId, len(allCallLogs), len(callLogs))
 
             if (callLogs is None or len(callLogs) == 0):
                 return None
@@ -369,15 +387,8 @@ class BlueConAPI:
         """Get the most recent call history entries for the provided device, newest first"""
 
         async with aiohttp.ClientSession() as session:
-            async with session.get(f'{FERMAX_BASE_URL}/callManager/api/v1/callregistry/participant',
-                                    params = {
-                                        "appToken": deviceId,
-                                        "callRegistryType": "all"
-                                    },
-                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
-                responseJson = await response.json()
+            callLogs = await self._getCallRegistry(session, deviceId)
 
-        callLogs: List[CallLog] = [callLog for callLog in map(CallLog, responseJson) if callLog.deviceId == deviceId]
         callLogs.sort(key = lambda x: x.getCallDate(), reverse = True)
         return callLogs[:limit]
 
