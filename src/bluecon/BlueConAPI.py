@@ -144,18 +144,42 @@ class BlueConAPI:
                     return response.status == 200
 
     async def registerAppToken(self, active: bool) -> bool:
+        """Register (or deactivate) this FCM token with Fermax.
+
+        Tries the v2 endpoint with the payload of the current official app first
+        and falls back to the legacy v1 endpoint. The status and body of every
+        attempt are logged, since a 200 from the legacy endpoint does not prove
+        that pushes will actually be delivered."""
+
+        headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()
+        attempts = [
+            ("v2", f'{FERMAX_BASE_URL}/notification/api/v2/apptoken', {
+                "token": self.deviceId,
+                "appVersion": "4.3.4",
+                "appBuild": "749",
+                "locale": "en",
+                "os": "Android",
+                "osVersion": "Android 14",
+                "active": active
+            }),
+            ("v1", f'{FERMAX_BASE_URL}/notification/api/v1/apptoken', {
+                "token": self.deviceId,
+                "appVersion": "3.3.2",
+                "locale": "en",
+                "os": "Android",
+                "osVersion": "Android 13",
+                "active": active
+            })
+        ]
+
         async with aiohttp.ClientSession() as session:
-            async with session.post(f'{FERMAX_BASE_URL}/notification/api/v1/apptoken',
-                                    json = {
-                                        "token": self.deviceId,
-                                        "appVersion": "3.3.2",
-                                        "locale": "en",
-                                        "os": "Android",
-                                        "osVersion": "Android 13",
-                                        "active": active
-                                    },
-                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
-                return response.status == 200
+            for version, url, payload in attempts:
+                async with session.post(url, json = payload, headers = headers) as response:
+                    body = (await response.text())[:300]
+                    _LOGGER.info("App token registration (%s) -> HTTP %s: %s", version, response.status, body)
+                    if 200 <= response.status < 300:
+                        return True
+        return False
     
     async def startNotificationListener(self, hass = None): #hass is an optional parameter for Home Assistant
         """Starts the notification listener to get notifications about calls"""
