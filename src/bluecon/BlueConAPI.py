@@ -174,7 +174,7 @@ class BlueConAPI:
                 "phoneMobile": "HomeAssistant",
                 "id": self._getInstallationId(),
                 "active": active,
-                "force": False
+                "force": True
             }),
             ("v1", f'{FERMAX_BASE_URL}/notification/api/v1/apptoken', {
                 "token": self.deviceId,
