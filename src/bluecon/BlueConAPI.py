@@ -356,24 +356,32 @@ class BlueConAPI:
         _LOGGER.debug("Call registry returned %s entries for device %s (%s with photo)", len(responseJson), deviceId, sum(1 for c in callLogs if c.photoId is not None))
         return callLogs
 
+    async def getCallPhoto(self, photoId: str) -> bytes | None:
+        """Download the photo Fermax stored for a call registry entry"""
+
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f'{FERMAX_BASE_URL}/callManager/api/v1/photocall',
+                                    params = {
+                                        "photoId": photoId
+                                    },
+                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
+                if response.status != 200:
+                    _LOGGER.warning("Photo request for %s failed with HTTP %s", photoId, response.status)
+                    return None
+                return base64.b64decode((await response.json())["image"]["data"])
+
     async def getLastPicture(self, deviceId: str) -> bytes | None:
         async with aiohttp.ClientSession() as session:
             allCallLogs = await self._getCallRegistry(session, deviceId)
-            callLogs: List[CallLog] = [callLog for callLog in allCallLogs if callLog.photoId is not None]
-            _LOGGER.info("Call registry for device %s: %s entries, %s with photo", deviceId, len(allCallLogs), len(callLogs))
+        callLogs: List[CallLog] = [callLog for callLog in allCallLogs if callLog.photoId is not None]
+        _LOGGER.info("Call registry for device %s: %s entries, %s with photo", deviceId, len(allCallLogs), len(callLogs))
 
-            if (callLogs is None or len(callLogs) == 0):
-                return None
+        if len(callLogs) == 0:
+            return None
 
-            latestCallLog : CallLog | None = max(callLogs, key = lambda x: x.getCallDate())
+        latestCallLog : CallLog = max(callLogs, key = lambda x: x.getCallDate())
+        return await self.getCallPhoto(latestCallLog.photoId)
 
-            async with session.get(f'{FERMAX_BASE_URL}/callManager/api/v1/photocall',
-                                    params = {
-                                        "photoId": latestCallLog.photoId
-                                    },
-                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
-                return base64.b64decode((await response.json())["image"]["data"])
-    
     async def getDeviceInfo(self, deviceId: str) -> DeviceInfo | None:
         async with aiohttp.ClientSession() as session:
             async with session.get(f'{FERMAX_BASE_URL}/deviceaction/api/v1/device/{deviceId}',
@@ -391,22 +399,3 @@ class BlueConAPI:
 
         callLogs.sort(key = lambda x: x.getCallDate(), reverse = True)
         return callLogs[:limit]
-
-    async def getFirmwareUpdateStatus(self, deviceId: str) -> dict | None:
-        """Get the firmware update status for the provided device.
-
-        The response shape returned by Fermax's API for this endpoint has not been
-        fully verified yet; this returns the raw JSON payload as-is so callers can
-        inspect it and the mapping can be refined once confirmed against a real device.
-        """
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f'{FERMAX_BASE_URL}/update/api/v1/firmware-update-process',
-                                    params = {
-                                        "deviceId": deviceId
-                                    },
-                                    headers = (await self.__getOrRefreshOAuthToken()).getBearerAuthHeader()) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    return None
