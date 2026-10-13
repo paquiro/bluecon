@@ -5,7 +5,7 @@ import json
 import hashlib
 import logging
 from typing import Callable, List
-from threading import Thread
+from threading import Event, Thread
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +22,8 @@ from bluecon.storage.IOAuthTokenStorage import IOAuthTokenStorage
 from bluecon.storage.InMemoryOAuthTokenStorage import InMemoryOAuthTokenStorage
 from bluecon.storage.INotificationInfoStorage import INotificationInfoStorage
 from bluecon.storage.FileNotificationInfoStorage import FileNotificationInfoStorage
+
+from bluecon.ReceiverSupervisor import stop_receiver, supervise_receiver
 
 from push_receiver import PushReceiver
 from push_receiver.android_fcm_register import AndroidFCM
@@ -96,6 +98,9 @@ class BlueConAPI:
         self.receiver : PushReceiver = None
         self.deviceId : str = None
         self._installationFid : str | None = None
+        self._stopEvent : Event = Event()
+        self._pushCredentials : dict | None = None
+        self._initialPersistentIds : list[str] = []
         self.notificationCallback = notificationCallback
     
     def __getAuthHeader(self) -> str:
@@ -246,11 +251,17 @@ class BlueConAPI:
                 _LOGGER.exception("Failed to process FCM notification: %s", notification)
 
         def receiver_listen(blueConAPIClient: BlueConAPI):
-            try:
-                _LOGGER.info("FCM push receiver starting to listen")
-                blueConAPIClient.receiver.listen(on_notification, blueConAPIClient)
-            except Exception:
-                _LOGGER.exception("FCM push receiver stopped unexpectedly")
+            def setReceiver(receiver):
+                blueConAPIClient.receiver = receiver
+
+            supervise_receiver(
+                create_receiver = lambda persistentIds: PushReceiver(blueConAPIClient._pushCredentials, persistentIds),
+                callback = on_notification,
+                obj = blueConAPIClient,
+                stop_event = blueConAPIClient._stopEvent,
+                persistent_ids = blueConAPIClient._initialPersistentIds,
+                on_receiver = setReceiver
+            )
 
         async def listener_thread(blueConAPIClient: BlueConAPI):
             def buildPackageCert():
@@ -314,10 +325,9 @@ class BlueConAPI:
 
             received_persistent_ids = await blueConAPIClient.__notificationInfoStorage.retrievePersistentIds()
 
-            if received_persistent_ids is None:
-                blueConAPIClient.receiver = PushReceiver(credentials)
-            else:
-                blueConAPIClient.receiver = PushReceiver(credentials, received_persistent_ids)
+            blueConAPIClient._pushCredentials = credentials
+            blueConAPIClient._initialPersistentIds = list(received_persistent_ids or [])
+            blueConAPIClient._stopEvent = Event()
 
             if hass:
                 hass.async_add_executor_job(receiver_listen, blueConAPIClient)
@@ -326,13 +336,17 @@ class BlueConAPI:
         await listener_thread(self)
     
     async def stopNotificationListener(self) -> bool:
-        """Deactivate this device's token with Fermax.
+        """Stop the push receiver and deactivate this device's token with Fermax.
 
-        The push receiver runs in an executor job owned by the caller, so there is no
-        thread to join here (the old self.__listenerThread no longer exists)."""
+        Setting the stop event and closing the socket makes the receiver loop, which runs in an
+        executor job owned by the caller, finish cleanly instead of trying to reconnect."""
+
+        self._stopEvent.set()
+        if self.receiver is not None:
+            stop_receiver(self.receiver)
 
         return not await self.registerAppToken(False)
-    
+
     async def _getCallRegistry(self, session: aiohttp.ClientSession, deviceId: str) -> List[CallLog]:
         """Fetch the call registry of this app registration, restricted to the given device.
 
