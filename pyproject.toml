@@ -15,9 +15,9 @@ dependencies = [
   "aiohttp",
   "python-dateutil",
   "rustPlusPushReceiver",
-  # betterproto, which rustPlusPushReceiver depends on, imports pkg_resources without
-  # declaring setuptools, and setuptools removed pkg_resources in version 82.
-  "setuptools<82",
+  # betterproto 2.0.0b5 and earlier import pkg_resources without declaring setuptools, and setuptools
+  # removed pkg_resources in version 82. Later releases no longer need it.
+  "betterproto>=2.0.0b7",
 ]
 classifiers = [
   "Development Status :: 4 - Beta",
